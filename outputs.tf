@@ -28,9 +28,8 @@ output "kafka_password" {
 }
 
 output "kafka_ca_cert" {
-  description = "Certificado CA — cole em KAFKA_CA_CERT_PEM no GitHub/Render"
-  value       = aiven_kafka.events.ca_cert
-  sensitive   = true
+  value     = data.aiven_project_ca_cert.ca_cert.ca_cert
+  sensitive = true
 }
 
 output "grafana_uri" {
