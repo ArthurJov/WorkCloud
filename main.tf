@@ -66,6 +66,9 @@ resource "aiven_kafka_topic" "bcb_indicadores" {
   replication  = 2
 }
 
+data "aiven_project_ca_cert" "ca_cert" {
+  project = var.aiven_project
+}
 # ---------------------------------------------------------------------------
 # Grafana — exploração visual dos dados do Postgres
 # ---------------------------------------------------------------------------
