@@ -60,16 +60,6 @@ crie:
 | `AIVEN_PROJECT` | Nome do projeto na Aiven |
 | `RENDER_DEPLOY_HOOK_URL` | Deploy hook do serviço no Render (passo 5) |
 | `APP_HEALTHCHECK_URL` | URL pública do app no Render, ex: `https://seu-app.onrender.com` |
-| `AIVEN_DB_URL` | Service URI do Postgres (necessária no job de consumer em lote) |
-| `KAFKA_BOOTSTRAP_SERVERS` | Saída `kafka_bootstrap_servers` do Terraform |
-| `KAFKA_USERNAME` | Saída `kafka_username` do Terraform |
-| `KAFKA_PASSWORD` | Saída `kafka_password` do Terraform |
-| `KAFKA_CA_CERT_PEM` | Saída `kafka_ca_cert` do Terraform (cole o certificado inteiro) |
-| `KAFKA_TOPIC` | `bcb-indicadores` (ou o valor de `kafka_topic_name`) |
-
-Os 5 secrets de Kafka só são necessários se você for usar a extensão de
-streaming (seção [Streaming com Kafka](#streaming-com-kafka) abaixo) — o
-laboratório básico funciona só com os 4 primeiros.
 
 ### 4. Provisionar o banco na Aiven
 - Vá na aba **Actions** do repositório e rode manualmente o workflow
@@ -154,75 +144,6 @@ escrito para ser fácil de adaptar a outras APIs de dados abertos do governo:
   ([api.portaldatransparencia.gov.br](https://api.portaldatransparencia.gov.br/)),
   que deve ser adicionado como um novo secret/variável de ambiente.
 
-## Streaming com Kafka
-
-Extensão opcional que transforma a ingestão de "polling batelado" (o app
-busca dados sozinho, de tempos em tempos) em **arquitetura orientada a
-eventos**: um *producer* publica os dados novos do BCB num tópico Kafka, e
-um *consumer* — dissociado do app — assina esse tópico e grava no mesmo
-Postgres. O dashboard Flask não muda nada na leitura.
-
-```
-GitHub Actions (cron 15min)          Kafka (Aiven)              Consumer
-┌────────────────┐   publica    ┌──────────────────┐  assina  ┌──────────┐
-│  producer.py    │ ───────────▶ │ bcb-indicadores  │ ───────▶ │consumer.py│
-│ busca no BCB    │              │     (tópico)     │          │ grava no  │
-└────────────────┘               └──────────────────┘          │ Postgres  │
-                                                                  └──────────┘
-```
-
-**Atenção de custo:** ao contrário do Postgres (plano `hobbyist`, gratuito
-em contas elegíveis), o Aiven for Apache Kafka normalmente exige um plano
-pago (`startup-2` por padrão no Terraform). Confirme disponibilidade e
-custo na sua conta antes de rodar o `terraform apply`.
-
-### Onde o consumer roda
-
-O `consumer.py` foi escrito para funcionar dos dois jeitos, ao mesmo tempo
-se você quiser (ambos compartilham o mesmo `KAFKA_GROUP_ID`, então o Kafka
-nunca entrega a mesma mensagem duas vezes):
-
-1. **Worker contínuo no Render** — sempre escutando o tópico:
-   - No Render, crie um novo serviço **Background Worker** (não Web
-     Service), apontando para o mesmo repositório/Dockerfile.
-   - Em **Settings → Docker Command**, sobrescreva o comando padrão para
-     `python consumer.py`.
-   - Configure as mesmas variáveis de ambiente do app (`AIVEN_DB_URL`) mais
-     as 5 variáveis de Kafka (mesmos valores dos secrets do GitHub).
-
-2. **Job em lote no GitHub Actions** — `.github/workflows/kafka-consume-batch.yml`,
-   roda a cada 20 min por 30 segundos e sai. Funciona como **rede de
-   segurança**: se o worker do Render cair ou dormir, os dados não ficam
-   represados por muito tempo.
-
-Para o producer, o workflow `.github/workflows/kafka-produce.yml` já cuida
-de tudo — roda a cada 15 min, sem precisar de nenhum serviço always-on.
-
-### Testando manualmente
-
-Pelo botão **Run workflow** na aba Actions, você pode disparar o
-`Kafka - Producer` manualmente e depois checar no Grafana (ou direto no
-Postgres, via PG Studio) se o `fetched_at` da tabela `bcb_series` mudou.
-
-## Exploração com Grafana
-
-Além do dashboard Flask "caseiro", o Terraform provisiona um serviço
-**Aiven for Grafana**, para explorar os mesmos dados visualmente, sem
-escrever código:
-
-1. Depois do `terraform apply`, acesse a saída `grafana_uri` (ou o console
-   da Aiven → serviço `bcb-grafana` → Overview) para pegar a URL e as
-   credenciais de acesso.
-2. Em **Connections → Data sources → Add data source → PostgreSQL**,
-   preencha host/porta/usuário/senha do serviço `dashboard-pg` (mesmas
-   informações de **Connection information** no console da Aiven).
-3. Crie um painel apontando para a tabela `bcb_series` — por exemplo, uma
-   série temporal filtrando por `series_code`.
-
-Isso deixa nítida, em aula, a diferença entre um dashboard sob medida
-(controle total do código, mais trabalho) e um dashboard gerenciado
-(configuração via UI, menos código).
-
 ## Variáveis de ambiente da aplicação
 
 Veja `app/.env.example`. Em produção (Render), são configuradas na aba
@@ -243,20 +164,16 @@ Veja `app/.env.example`. Em produção (Render), são configuradas na aba
  ┌───────────────┐        ┌──────────────────────┐
  │ infra.yml     │        │ ci-cd.yml            │
  │ Terraform     │        │ test → build → push  │
- │ → PG + Kafka  │        │ imagem (GHCR)         │
- │   + Grafana   │        └──────────┬───────────┘
- └──────┬────────┘                   │
-        │                            ▼
-        ▼                     Render (deploy hook)
-  Aiven.io (PostgreSQL               │
-  gerenciado, SSL)                   ▼
-        ▲               App Flask (dashboard) ── lê ──▶ Aiven for Grafana
-        │                            ▲
-        │ upsert            AIVEN_DB_URL
-        │
-  consumer.py ◀── assina ── bcb-indicadores ◀── publica ── producer.py
-  (Render worker                (Kafka)              (GH Actions, cron 15min)
-   ou GH Actions --once)
+ │ → PostgreSQL  │        │ imagem (GHCR)        │
+ └──────┬────────┘        └──────────┬───────────┘
+        │                            │
+        ▼                            ▼
+  Aiven.io (PostgreSQL        Render (deploy hook)
+  gerenciado, SSL)                   │
+        ▲                            ▼
+        │                 App Flask (dashboard)
+        └────────── lê/grava ────────┘
+                      AIVEN_DB_URL
 ```
 
 ## Troubleshooting — problemas comuns no deploy
@@ -385,8 +302,3 @@ vez de `8080`, o que causa o mesmo sintoma por um motivo diferente
 
 - Adicionar um ambiente de *staging* com `workflow_dispatch` manual antes
   do deploy em produção.
-- Um segundo consumer "fan-out" do mesmo tópico Kafka — por exemplo, um
-  alerta quando o dólar varia mais de 1% num dia, mostrando que múltiplos
-  consumidores podem reagir ao mesmo evento de formas diferentes.
-- Trocar o Aiven for Grafana por **Aiven for OpenSearch**, indexando os
-  eventos do Kafka para busca full-text e análise de logs.
