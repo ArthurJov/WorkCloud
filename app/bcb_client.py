@@ -1,5 +1,5 @@
-"""
-Módulo compartilhado: conexão com o Postgres da Aiven e leitura da API
+ """
+Módulo compartilhado: conexão com o Postgres da Aiven e leitura da API aa
 de Dados Agregados do IBGE (Emprego e Preços — SIDRA/Agregados v3).
 Usado por app.py — concentra a lógica de acesso a dados num único módulo.
 """
