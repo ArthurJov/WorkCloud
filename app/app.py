@@ -1,10 +1,10 @@
 """
 Dashboard de Indicadores Econômicos — App Flask
-Lê os indicadores do Postgres da Aiven (tabela bcb_series). Os dados chegam
-lá via cache batch: este próprio app busca dados novos na API do BCB quando
-o cache está velho (ver refresh_stale_series abaixo).
+Lê os indicadores do Postgres da Aiven (tabela ibge_series). Os dados chegam
+lá via cache batch: este próprio app busca dados novos na API de Dados
+Agregados do IBGE quando o cache está velho (ver refresh_stale_series abaixo).
 
-Variáveis de ambiente esperadas (ver .env.example):
+Variáveis de ambiente esperadas:
   AIVEN_DB_URL   -> string de conexão fornecida pela Aiven
   PORT           -> porta HTTP (default 8080)
   CACHE_HOURS    -> horas antes de buscar dados novos na API (default 6)
@@ -23,9 +23,6 @@ app = Flask(__name__)
 CACHE_HOURS = int(os.environ.get("CACHE_HOURS", 6))
 START_TIME = time.time()
 
-# Garante que as tabelas existam assim que o módulo é carregado — necessário
-# porque em produção o app roda via gunicorn (`gunicorn app:app`), que nunca
-# executa o bloco `if __name__ == "__main__":` lá embaixo.
 bcb.init_db()
 
 
@@ -40,7 +37,7 @@ def is_cache_stale(series_code: int) -> bool:
     with bcb.get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT MAX(fetched_at) AS last_fetch FROM bcb_series WHERE series_code = %s;",
+                "SELECT MAX(fetched_at) AS last_fetch FROM ibge_series WHERE series_code = %s;",
                 (series_code,),
             )
             row = cur.fetchone()
@@ -51,15 +48,15 @@ def is_cache_stale(series_code: int) -> bool:
 
 
 def refresh_stale_series():
-    """Cache batch: só busca na API do BCB se a série não foi atualizada
+    """Cache batch: só busca na API do IBGE se a série não foi atualizada
     recentemente (mais de CACHE_HOURS)."""
     for code in bcb.SERIES:
         if is_cache_stale(code):
             try:
-                points = bcb.fetch_series_from_bcb(code)
+                points = bcb.fetch_series_from_ibge(code)
                 bcb.upsert_series(code, points)
-            except (requests.RequestException, ValueError) as exc:  # noqa: BLE001
-                app.logger.warning("Falha ao atualizar série %s: %s", code, exc)
+            except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
+                app.logger.warning("Falha ao atualizar série IBGE %s: %s", code, exc)
 
 
 def get_series_data(series_code: int):
@@ -68,10 +65,14 @@ def get_series_data(series_code: int):
             cur.execute(
                 """
                 SELECT ref_date, value
-                FROM bcb_series
-                WHERE series_code = %s
-                ORDER BY ref_date ASC
-                LIMIT %s;
+                FROM (
+                    SELECT ref_date, value
+                    FROM ibge_series
+                    WHERE series_code = %s
+                    ORDER BY ref_date DESC
+                    LIMIT %s
+                ) sub
+                ORDER BY ref_date ASC;
                 """,
                 (series_code, bcb.POINTS_PER_SERIES),
             )
@@ -96,9 +97,9 @@ def get_dashboard_data():
                 "name": meta["name"],
                 "unit": meta["unit"],
                 "latest_value": round(float(latest["value"]), meta["casas"]) if latest else None,
-                "latest_date": latest["ref_date"].strftime("%d/%m/%Y") if latest else None,
+                "latest_date": latest["ref_date"].strftime("%m/%Y") if latest else None,
                 "delta": delta,
-                "labels": [r["ref_date"].strftime("%d/%m") for r in rows],
+                "labels": [r["ref_date"].strftime("%m/%Y") for r in rows],
                 "values": [round(float(r["value"]), meta["casas"]) for r in rows],
             }
         )
@@ -132,13 +133,12 @@ def api_indicators():
 
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
-    """Força a atualização de todas as séries via cache batch, ignorando a
-    idade do cache. Chamado periodicamente pelo workflow refresh-data.yml."""
+    """Força a atualização de todas as séries do IBGE via cache batch."""
     for code in bcb.SERIES:
         try:
-            points = bcb.fetch_series_from_bcb(code)
+            points = bcb.fetch_series_from_ibge(code)
             bcb.upsert_series(code, points)
-        except (requests.RequestException, ValueError) as exc:  # noqa: BLE001
+        except (requests.RequestException, ValueError, KeyError, IndexError) as exc:
             return jsonify({"status": "error", "series": code, "detail": str(exc)}), 502
     return jsonify({"status": "ok", "refreshed": list(bcb.SERIES.keys())})
 
@@ -151,7 +151,7 @@ def healthz():
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
         return jsonify({"status": "ok"}), 200
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return jsonify({"status": "error", "detail": str(exc)}), 503
 
 
