@@ -2,15 +2,15 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
-  <title>Dashboard — Indicadores Econômicos (Dados Abertos BCB)</title>
+  <title>Dashboard — Indicadores Econômicos (Dados Abertos IBGE)</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 </head>
 <body>
   <header>
-    <h1>📈 Indicadores Econômicos do Brasil</h1>
+    <h1>📈 Indicadores Econômicos do Brasil (Emprego e Preços)</h1>
     <p class="subtitle">
-      Dados abertos do Banco Central (SGS) · cache renovado a cada {{ data.cache_hours }}h ·
+      Dados abertos do IBGE (API de Dados Agregados v3) · cache renovado a cada {{ data.cache_hours }}h ·
       persistidos em PostgreSQL gerenciado pela Aiven.io
     </p>
   </header>
@@ -48,7 +48,7 @@
   <footer>
     <small>
       Atualiza automaticamente a cada 60s · Fonte:
-      <a href="https://dadosabertos.bcb.gov.br/" target="_blank" rel="noopener">dadosabertos.bcb.gov.br</a>
+      <a href="https://servicodados.ibge.gov.br/api/docs/agregados?versao=3" target="_blank" rel="noopener">servicodados.ibge.gov.br</a>
       · <a href="/api/indicators">/api/indicators</a> · <a href="/healthz">/healthz</a>
     </small>
   </footer>
